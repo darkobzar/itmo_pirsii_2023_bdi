@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/measures"
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/utils"
@@ -44,19 +46,26 @@ type Index interface {
 
 type FlatIndex struct {
 	vectors []*utils.Vector
+	sync.RWMutex
 }
 
 func (index *FlatIndex) GetName() string { return "FlatIndex" }
 
 func (index *FlatIndex) GetVectors() []*utils.Vector {
+	index.RLock()
+	defer index.RUnlock()
 	return index.vectors
 }
 
 func (index *FlatIndex) AddVector(v *utils.Vector) {
+	index.Lock()
+	defer index.Unlock()
 	index.vectors = append(index.vectors, v)
 }
 
 func (index *FlatIndex) RemoveVector(id int) {
+	index.Lock()
+	defer index.Unlock()
 
 	for idx := range index.vectors {
 		if index.vectors[idx].ID == id {
@@ -68,6 +77,9 @@ func (index *FlatIndex) RemoveVector(id int) {
 }
 
 func (index *FlatIndex) UpdateVector(v *utils.Vector) (err error) {
+	index.Lock()
+	defer index.Unlock()
+
 	for idx := range index.vectors {
 		if index.vectors[idx].ID == v.ID {
 			index.vectors[idx] = v
@@ -78,6 +90,9 @@ func (index *FlatIndex) UpdateVector(v *utils.Vector) (err error) {
 }
 
 func (index *FlatIndex) FindClosest(v *utils.Vector, measure measures.Measure, n int) (results []*SearchResult) {
+	index.RLock()
+	defer index.RUnlock()
+
 	pq := priorityQueue{}
 
 	for idx := range index.vectors {
@@ -95,10 +110,16 @@ func (index *FlatIndex) FindClosest(v *utils.Vector, measure measures.Measure, n
 		// TODO: Нужно ли делать копии каждого вектора?
 		results = append(results, &SearchResult{qi.value, -qi.priority})
 	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Distance < results[j].Distance
+	})
 	return results
 }
 
 func (index *FlatIndex) FindById(id int) (v *utils.Vector, err error) {
+	index.RLock()
+	defer index.RUnlock()
+
 	for idx := range index.vectors {
 		if index.vectors[idx].ID == id {
 			v := index.vectors[idx].Copy()
@@ -109,7 +130,6 @@ func (index *FlatIndex) FindById(id int) (v *utils.Vector, err error) {
 }
 
 func (index *FlatIndex) Load(path string) (err error) {
-
 	file, _ := os.Open(path)
 	scanner := bufio.NewScanner(file)
 
@@ -143,6 +163,8 @@ func (index *FlatIndex) Load(path string) (err error) {
 }
 
 func (index *FlatIndex) Flush(path string) (err error) {
+	index.Lock()
+	defer index.Unlock()
 
 	if _, err := os.Stat(path); err == nil {
 		err := os.Remove(path)
@@ -191,5 +213,8 @@ func (index *FlatIndex) Flush(path string) (err error) {
 }
 
 func (index FlatIndex) Len() int {
+	index.RLock()
+	defer index.RUnlock()
+
 	return len(index.vectors)
 }

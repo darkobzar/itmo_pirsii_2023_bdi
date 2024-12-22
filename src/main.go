@@ -1,85 +1,93 @@
 package main
 
 import (
-	"fmt"
-	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/measures"
-	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/utils"
-
+	"context"
+	"encoding/json"
+	"flag"
+	"github.com/gorilla/mux"
+	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/api"
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/database"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"time"
 )
 
+const (
+	host = "0.0.0.0"
+	port = "8000"
+	path = "./data"
+)
+
+func WrapContext(next http.Handler, db *database.DataBase) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Println(r.Method, "-", r.RequestURI)
+		ctx := context.WithValue(r.Context(), "db", db)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func main() {
-	v1 := &utils.Vector{1, []float64{0, 0, 0, 0}}
-	v2 := &utils.Vector{2, []float64{0, 1, 1, 0}}
-	v3 := &utils.Vector{3, []float64{0, 0, 0, 1}}
-	v4 := &utils.Vector{4, []float64{0, 0, 0, 1}}
-	vf := &utils.Vector{0, []float64{0, 0, 0, 1}}
 
-	// Создаем или читаем БД
-	dbs, err := database.NewDataBase("test_db", "./data")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(dbs)
+	var wait time.Duration
+	flag.DurationVar(&wait, "graceful-timeout", time.Second*15, "the duration for which the server gracefully wait for existing connections to finish - e.g. 15s or 1m")
+	flag.Parse()
 
-	// Добавляем новую коллекцию
-	err = dbs.AddCollection("test_col")
-	if err != nil {
-		panic(err)
-	}
-	// Удаляем коллекцию
-	err = dbs.RemoveCollection("test_col")
-	if err != nil {
-		panic(err)
-	}
+	router := mux.NewRouter()
 
-	colName := "test_col_1"
-	// Добавляем новую коллекцию
-	err = dbs.AddCollection(colName)
-	if err != nil {
-		panic(err)
-	}
-	err = dbs.Load(colName)
-	if err != nil {
-		panic(err)
-	}
-	// Добавляем в коллекцию вектора
-	err = dbs.AddVector(colName, v1)
-	err = dbs.AddVector(colName, v2)
-	err = dbs.AddVector(colName, v3)
-	err = dbs.AddVector(colName, v4)
-	if err != nil {
-		panic(err)
+	db := database.DataBase{Path: path}
+
+	router.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+
+	router.HandleFunc("/api/database", api.CreateOrGetDB).Methods("POST")
+
+	router.HandleFunc("/api/database/{database}/collection", api.CreateCollection).Methods("POST")
+	router.HandleFunc("/api/database/{database}/collection/{name}", api.LoadCollection).Methods("GET")
+	router.HandleFunc("/api/database/{database}/collection/{name}", api.FlushCollection).Methods("PUT")
+	router.HandleFunc("/api/database/{database}/collection/{name}", api.DeleteCollection).Methods("DELETE")
+
+	router.HandleFunc("/api/database/{database}/collection/{name}/vector", api.AddVector).Methods("POST")
+	router.HandleFunc("/api/database/{database}/collection/{name}/vector/{id}", api.GetVector).Methods("GET")
+	router.HandleFunc("/api/database/{database}/collection/{name}/vector/{id}", api.UpdateVector).Methods("PUT")
+	router.HandleFunc("/api/database/{database}/collection/{name}/vector/{id}", api.RemoveVector).Methods("DELETE")
+	router.HandleFunc("/api/database/{database}/collection/{name}/find", api.GetClosest).Methods("POST")
+
+	srv := &http.Server{
+		Addr: host + ":" + port,
+		// Good practice to set timeouts to avoid Slowloris attacks.
+		WriteTimeout: time.Second * 15,
+		ReadTimeout:  time.Second * 15,
+		IdleTimeout:  time.Second * 60,
+		Handler:      WrapContext(router, &db), // Pass our instance of gorilla/mux in.
 	}
 
-	// Сохраняем на диск
-	err = dbs.Flush(colName)
-	if err != nil {
-		panic(err)
-	}
-	// Поиск ближайщих
-	results, err := dbs.FindClosest(colName, vf, measures.EuclideanDistanceMeasure{}, 3)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(results)
+	// Run our server in a goroutine so that it doesn't block.
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Println(err)
+		}
+	}()
 
-	//Поиск по ID
-	foundVector, err := dbs.FindById(colName, 1)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(foundVector)
+	c := make(chan os.Signal, 1)
+	// We'll accept graceful shutdowns when quit via SIGINT (Ctrl+C)
+	// SIGKILL, SIGQUIT or SIGTERM (Ctrl+/) will not be caught.
+	signal.Notify(c, os.Interrupt)
 
-	//Удаление вектора
-	err = dbs.RemoveVector(colName, 2)
-	if err != nil {
-		return
-	}
+	// Block until we receive our signal.
+	<-c
 
-	// Обновление вектора
-	//v0 := utils.Vector{1, []float64{5, 5, 5, 5}}
-	//db.SetVector(2, v0)
-	//fmt.Println(db)
-
+	// Create a deadline to wait for.
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	// Doesn't block if no connections, but will otherwise wait
+	// until the timeout deadline.
+	srv.Shutdown(ctx)
+	// Optionally, you could run srv.Shutdown in a goroutine and block on
+	// <-ctx.Done() if your application should wait for other services
+	// to finalize based on context cancellation.
+	log.Println("shutting down")
+	os.Exit(0)
 }

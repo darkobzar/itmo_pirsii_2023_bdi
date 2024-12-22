@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/index"
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/measures"
@@ -31,8 +32,41 @@ type IDataBase interface {
 	FindById(collectionName string, id int) (v *utils.Vector, err error)
 }
 
+type DataBase struct {
+	Path       string
+	structures map[string]*DataBaseStruct
+	m          sync.RWMutex
+}
+
+func (db *DataBase) NewDataBase(name string) (dataBase *DataBaseStruct, err error) {
+	db.m.Lock()
+	defer db.m.Unlock()
+
+	dataBase = &DataBaseStruct{name: name, Path: db.Path, Collections: make(map[string]string), LoadedCollections: make(map[string]*Collection), ID_count: 0}
+	err = dataBase.Init()
+	if err != nil {
+		return nil, err
+	}
+	if db.structures == nil {
+		db.structures = map[string]*DataBaseStruct{}
+	}
+	db.structures[name] = dataBase
+	return dataBase, nil
+}
+
+func (db *DataBase) Get(name string) (dbs *DataBaseStruct, err error) {
+	db.m.RLock()
+	defer db.m.RUnlock()
+
+	dbs, ok := db.structures[name]
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("Structure %s doesnt exist", name))
+	}
+	return dbs, nil
+}
+
 func NewDataBase(name string, path string) (dataBase *DataBaseStruct, err error) {
-	dataBase = &DataBaseStruct{name, path, make(map[string]string), make(map[string]*Collection), 0}
+	dataBase = &DataBaseStruct{name: name, Path: path, Collections: make(map[string]string), LoadedCollections: make(map[string]*Collection), ID_count: 0, cm: sync.RWMutex{}, lm: sync.RWMutex{}}
 	err = dataBase.Init()
 	if err != nil {
 		return nil, err
@@ -47,6 +81,9 @@ type DataBaseStruct struct {
 	Collections       map[string]string //словарь - имя коллекции: путь к ней
 	LoadedCollections map[string]*Collection
 	ID_count          int
+
+	cm sync.RWMutex
+	lm sync.RWMutex
 }
 
 // Инициализируем БД
@@ -92,6 +129,9 @@ func (dbs *DataBaseStruct) Init() (err error) {
 }
 
 func (dbs *DataBaseStruct) AddCollection(collectionName string) (err error) {
+	dbs.cm.Lock()
+	defer dbs.cm.Unlock()
+
 	fullPath := path.Join(dbs.Path, dbs.name, collectionName)
 	_, err_path := os.Stat(fullPath)
 	if os.IsNotExist(err_path) {
@@ -126,6 +166,9 @@ func (dbs *DataBaseStruct) AddCollection(collectionName string) (err error) {
 
 // удаляем коллекцию из БД
 func (dbs *DataBaseStruct) RemoveCollection(collectionName string) (err error) {
+	dbs.cm.Lock()
+	defer dbs.cm.Unlock()
+
 	collectionPath, ok := dbs.Collections[collectionName]
 	if !ok {
 		return nil
@@ -154,6 +197,11 @@ func (dbs *DataBaseStruct) RemoveCollection(collectionName string) (err error) {
 }
 
 func (dbs *DataBaseStruct) Load(collectionName string) (err error) {
+	dbs.cm.Lock()
+	dbs.lm.Lock()
+	defer dbs.cm.Unlock()
+	defer dbs.lm.Unlock()
+
 	collection, ok := dbs.LoadedCollections[collectionName]
 	if ok {
 		// Коллекция уже загружена
@@ -167,16 +215,24 @@ func (dbs *DataBaseStruct) Load(collectionName string) (err error) {
 	if err != nil {
 		return err
 	}
+	err = collection.Load()
+	if err != nil {
+		return err
+	}
 	dbs.LoadedCollections[collectionName] = collection
 	return nil
 }
 
 func (dbs *DataBaseStruct) Flush(collectionName string) (err error) {
+	dbs.lm.Lock()
+	defer dbs.lm.Unlock()
+
 	collection, err := dbs.getLoadedCollection(collectionName)
 	if err != nil {
 		return err
 	}
 	err = collection.Flush()
+	delete(dbs.LoadedCollections, collectionName)
 	return err
 }
 
@@ -209,6 +265,9 @@ func (dbs *DataBaseStruct) RemoveVector(collectionName string, id int) error {
 }
 
 func (dbs *DataBaseStruct) getLoadedCollection(collectionName string) (collection *Collection, err error) {
+	dbs.lm.RLock()
+	defer dbs.lm.RUnlock()
+
 	collection, ok := dbs.LoadedCollections[collectionName]
 	if !ok {
 		// Коллекция уже загружена
@@ -218,8 +277,8 @@ func (dbs *DataBaseStruct) getLoadedCollection(collectionName string) (collectio
 }
 
 func (dbs *DataBaseStruct) FindById(collectionName string, id int) (v *utils.Vector, err error) {
-	collection, ok := dbs.LoadedCollections[collectionName]
-	if !ok {
+	collection, err := dbs.getLoadedCollection(collectionName)
+	if err != nil {
 		// Коллекция уже загружена
 		return nil, errors.New(fmt.Sprintf("Collection %s doesnt load", collectionName))
 	}
@@ -227,9 +286,8 @@ func (dbs *DataBaseStruct) FindById(collectionName string, id int) (v *utils.Vec
 }
 
 func (dbs *DataBaseStruct) FindClosest(collectionName string, v *utils.Vector, measure measures.Measure, n int) (results []*index.SearchResult, err error) {
-	collection, ok := dbs.LoadedCollections[collectionName]
-	if !ok {
-		// Коллекция уже загружена
+	collection, err := dbs.getLoadedCollection(collectionName)
+	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Collection %s doesnt load", collectionName))
 	}
 	return collection.Index.FindClosest(v, measure, n), nil
