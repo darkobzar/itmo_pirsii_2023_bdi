@@ -18,6 +18,8 @@ const (
 	host = "0.0.0.0"
 	port = "8000"
 	path = "./data"
+	port_r = "8001"
+	port_r2 = "8002"
 )
 
 func WrapContext(next http.Handler, db *database.DataBase) http.Handler {
@@ -35,10 +37,18 @@ func main() {
 	flag.Parse()
 
 	router := mux.NewRouter()
+	router_r := mux.NewRouter()
+	router_r2 := mux.NewRouter()
 
 	db := database.DataBase{Path: path}
 
 	router.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	router_r.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	router_r2.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
 
@@ -55,6 +65,11 @@ func main() {
 	router.HandleFunc("/api/database/{database}/collection/{name}/vector/{id}", api.RemoveVector).Methods("DELETE")
 	router.HandleFunc("/api/database/{database}/collection/{name}/find", api.GetClosest).Methods("POST")
 
+
+	//replication
+	router_r.HandleFunc("/api/replica/{repl_num}/{database}/collection/{name}", api.Replicate).Methods("POST")
+	router_r2.HandleFunc("/api/replica/{repl_num}/{database}/collection/{name}", api.Replicate).Methods("POST")
+
 	srv := &http.Server{
 		Addr: host + ":" + port,
 		// Good practice to set timeouts to avoid Slowloris attacks.
@@ -63,6 +78,22 @@ func main() {
 		IdleTimeout:  time.Second * 60,
 		Handler:      WrapContext(router, &db), // Pass our instance of gorilla/mux in.
 	}
+	srv_r := &http.Server{
+		Addr: host + ":" + port_r,
+		// Good practice to set timeouts to avoid Slowloris attacks.
+		WriteTimeout: time.Second * 15,
+		ReadTimeout:  time.Second * 15,
+		IdleTimeout:  time.Second * 60,
+		Handler:      WrapContext(router_r, &db), // Pass our instance of gorilla/mux in.
+	}
+	srv_r2 := &http.Server{
+		Addr: host + ":" + port_r2,
+		// Good practice to set timeouts to avoid Slowloris attacks.
+		WriteTimeout: time.Second * 15,
+		ReadTimeout:  time.Second * 15,
+		IdleTimeout:  time.Second * 60,
+		Handler:      WrapContext(router_r2, &db), // Pass our instance of gorilla/mux in.
+	}
 
 	// Run our server in a goroutine so that it doesn't block.
 	go func() {
@@ -70,6 +101,19 @@ func main() {
 			log.Println(err)
 		}
 	}()
+	go func() {
+		if err := srv_r.ListenAndServe(); err != nil {
+			log.Println(err)
+		}
+	}()
+	go func() {
+		if err := srv_r2.ListenAndServe(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+
+
 
 	c := make(chan os.Signal, 1)
 	// We'll accept graceful shutdowns when quit via SIGINT (Ctrl+C)

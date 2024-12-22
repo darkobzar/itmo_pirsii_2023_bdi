@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"strconv"
 
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/index"
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/measures"
@@ -42,7 +43,7 @@ func (db *DataBase) NewDataBase(name string) (dataBase *DataBaseStruct, err erro
 	db.m.Lock()
 	defer db.m.Unlock()
 
-	dataBase = &DataBaseStruct{name: name, Path: db.Path, Collections: make(map[string]string), LoadedCollections: make(map[string]*Collection), ID_count: 0}
+	dataBase = &DataBaseStruct{name: name, Path: db.Path, Collections: make(map[string]*CollectionInfo), LoadedCollections: make(map[string]*Collection), ID_count: 0}
 	err = dataBase.Init()
 	if err != nil {
 		return nil, err
@@ -66,7 +67,7 @@ func (db *DataBase) Get(name string) (dbs *DataBaseStruct, err error) {
 }
 
 func NewDataBase(name string, path string) (dataBase *DataBaseStruct, err error) {
-	dataBase = &DataBaseStruct{name: name, Path: path, Collections: make(map[string]string), LoadedCollections: make(map[string]*Collection), ID_count: 0, cm: sync.RWMutex{}, lm: sync.RWMutex{}}
+	dataBase = &DataBaseStruct{name: name, Path: path, Collections: make(map[string]*CollectionInfo), LoadedCollections: make(map[string]*Collection), ID_count: 0, cm: sync.RWMutex{}, lm: sync.RWMutex{}}
 	err = dataBase.Init()
 	if err != nil {
 		return nil, err
@@ -74,11 +75,16 @@ func NewDataBase(name string, path string) (dataBase *DataBaseStruct, err error)
 	return dataBase, nil
 }
 
+type CollectionInfo struct {
+    Path string
+    Dim  int
+}
+
 // собственно сама БД
 type DataBaseStruct struct {
 	name              string
 	Path              string
-	Collections       map[string]string //словарь - имя коллекции: путь к ней
+	Collections       map[string]*CollectionInfo 
 	LoadedCollections map[string]*Collection
 	ID_count          int
 
@@ -121,14 +127,21 @@ func (dbs *DataBaseStruct) Init() (err error) {
 			str_emb := strings.Fields(line)
 			name_collection := str_emb[0]
 			path_collection := str_emb[1]
-			dbs.Collections[name_collection] = path_collection
+			dim_collection := str_emb[2]
+
+			dim, err := strconv.Atoi(dim_collection)
+			if err != nil {
+				fmt.Println("Error converting string to int:", err)
+			}
+
+			dbs.Collections[name_collection] = &CollectionInfo{Path: path_collection, Dim: dim}
 		}
 		dbs.ID_count = len(dbs.Collections)
 	}
 	return nil
 }
 
-func (dbs *DataBaseStruct) AddCollection(collectionName string) (err error) {
+func (dbs *DataBaseStruct) AddCollection(collectionName string, dim int) (err error) {
 	dbs.cm.Lock()
 	defer dbs.cm.Unlock()
 
@@ -154,12 +167,12 @@ func (dbs *DataBaseStruct) AddCollection(collectionName string) (err error) {
 		return err
 	}
 	defer dbFile.Close()
-	_, err = dbFile.WriteString(collectionName + " " + fullPath + "\n")
+	_, err = dbFile.WriteString(collectionName + " " + fullPath + " " + strconv.Itoa(dim) + "\n")
 	if err != nil {
 		return err
 	}
 
-	dbs.Collections[collectionName] = fullPath
+	dbs.Collections[collectionName] = &CollectionInfo{Path: fullPath, Dim: dim}
 	dbs.ID_count += 1
 	return nil
 }
@@ -169,12 +182,12 @@ func (dbs *DataBaseStruct) RemoveCollection(collectionName string) (err error) {
 	dbs.cm.Lock()
 	defer dbs.cm.Unlock()
 
-	collectionPath, ok := dbs.Collections[collectionName]
+	collection, ok := dbs.Collections[collectionName]
 	if !ok {
 		return nil
 	}
 
-	e := os.RemoveAll(collectionPath)
+	e := os.RemoveAll(collection.Path)
 	if e != nil {
 		return e
 	}
@@ -186,8 +199,8 @@ func (dbs *DataBaseStruct) RemoveCollection(collectionName string) (err error) {
 	}
 	defer file.Close()
 
-	for name, pathCollection := range dbs.Collections {
-		_, err = file.WriteString(name + " " + pathCollection + "\n")
+	for name, collection := range dbs.Collections {
+		_, err = file.WriteString(name + " " + collection.Path + " " + strconv.Itoa(collection.Dim) + "\n")
 		if err != nil {
 			return err
 		}
@@ -207,11 +220,11 @@ func (dbs *DataBaseStruct) Load(collectionName string) (err error) {
 		// Коллекция уже загружена
 		return nil
 	}
-	fullPath, ok := dbs.Collections[collectionName]
+	collection_info, ok := dbs.Collections[collectionName]
 	if !ok {
 		return errors.New(fmt.Sprintf("Cant find collection %s", collectionName))
 	}
-	collection, err = NewCollection(collectionName, fullPath)
+	collection, err = NewCollection(collectionName, collection_info.Path, collection_info.Dim)
 	if err != nil {
 		return err
 	}
@@ -223,17 +236,18 @@ func (dbs *DataBaseStruct) Load(collectionName string) (err error) {
 	return nil
 }
 
-func (dbs *DataBaseStruct) Flush(collectionName string) (err error) {
-	dbs.lm.Lock()
-	defer dbs.lm.Unlock()
+func (dbs *DataBaseStruct) Flush(collectionName string) (err error, vects []*utils.Vector) {
+	// dbs.lm.Lock()
+	// defer dbs.lm.Unlock()
 
 	collection, err := dbs.getLoadedCollection(collectionName)
 	if err != nil {
-		return err
+		return err, nil
 	}
 	err = collection.Flush()
+	vects = collection.Index.GetVectors()
 	delete(dbs.LoadedCollections, collectionName)
-	return err
+	return err, vects
 }
 
 func (dbs *DataBaseStruct) AddVector(collectionName string, v *utils.Vector) error {
@@ -241,6 +255,10 @@ func (dbs *DataBaseStruct) AddVector(collectionName string, v *utils.Vector) err
 	if err != nil {
 		return err
 	}
+	if (v.Len() !=collection.Dim){
+		return fmt.Errorf("Dimention of the vector = %d doesnt match dimention of the collection = %d", v.Len(), collection.Dim)
+	}
+
 	collection.Index.AddVector(v)
 	return nil
 }

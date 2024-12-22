@@ -13,10 +13,11 @@ type Collection struct {
 	Path  string
 	Index *index.FlatIndex
 	ID    int
+	Dim   int
 }
 
-func NewCollection(name string, path string) (collection *Collection, err error) {
-	collection = &Collection{name, path, &index.FlatIndex{}, 0}
+func NewCollection(name string, path string, dim int) (collection *Collection, err error) {
+	collection = &Collection{name, path, &index.FlatIndex{}, 0, dim}
 	err = collection.Init()
 	if err != nil {
 		return nil, err
