@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"strconv"
+	"log"
+	"time"
 
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/index"
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/measures"
@@ -75,6 +77,12 @@ func NewDataBase(name string, path string) (dataBase *DataBaseStruct, err error)
 	return dataBase, nil
 }
 
+func (db *DataBase) Stop() {
+	for _, dbs := range db.structures {
+		dbs.Stop()
+	}
+}
+
 type CollectionInfo struct {
     Path string
     Dim  int
@@ -87,6 +95,7 @@ type DataBaseStruct struct {
 	Collections       map[string]*CollectionInfo 
 	LoadedCollections map[string]*Collection
 	ID_count          int
+	saveStopFlag      chan bool
 
 	cm sync.RWMutex
 	lm sync.RWMutex
@@ -138,6 +147,26 @@ func (dbs *DataBaseStruct) Init() (err error) {
 		}
 		dbs.ID_count = len(dbs.Collections)
 	}
+
+	// Save every REPLICATION_TIME_S seconds
+	flusher := func() {
+		for name, _ := range dbs.LoadedCollections {
+			err = dbs.Save(name)
+			if err != nil {
+				log.Printf("Save error: %v", err)
+			}
+		}
+		log.Printf("Save run")
+	}
+
+	SaveRepeatTime, _ := strconv.Atoi(os.Getenv("REPLICATION_TIME_S"))
+	if SaveRepeatTime == 0 {
+		SaveRepeatTime = 60
+	}
+	log.Printf("SaveRepeatTime = %d", SaveRepeatTime)
+	stopper := schedule(flusher, time.Duration(SaveRepeatTime) * time.Second)
+	dbs.saveStopFlag = stopper
+
 	return nil
 }
 
@@ -236,6 +265,16 @@ func (dbs *DataBaseStruct) Load(collectionName string) (err error) {
 	return nil
 }
 
+func (dbs *DataBaseStruct) Save(collectionName string) (err error) {
+	collection, err := dbs.getLoadedCollection(collectionName)
+	if err != nil {
+		return err
+	}
+	err = collection.Flush()
+	// TODO: Add replication algorithm here
+	return err
+}
+
 func (dbs *DataBaseStruct) Flush(collectionName string) (err error, vects []*utils.Vector) {
 	// dbs.lm.Lock()
 	// defer dbs.lm.Unlock()
@@ -255,12 +294,12 @@ func (dbs *DataBaseStruct) AddVector(collectionName string, v *utils.Vector) err
 	if err != nil {
 		return err
 	}
-	if (v.Len() !=collection.Dim){
+	if (v.Len() != collection.Dim){
 		return fmt.Errorf("Dimention of the vector = %d doesnt match dimention of the collection = %d", v.Len(), collection.Dim)
 	}
 
-	collection.Index.AddVector(v)
-	return nil
+	err = collection.Index.AddVector(v)
+	return err
 }
 
 func (dbs *DataBaseStruct) UpdateVector(collectionName string, v *utils.Vector) error {
@@ -309,4 +348,30 @@ func (dbs *DataBaseStruct) FindClosest(collectionName string, v *utils.Vector, m
 		return nil, errors.New(fmt.Sprintf("Collection %s doesnt load", collectionName))
 	}
 	return collection.Index.FindClosest(v, measure, n), nil
+}
+
+func (dbs *DataBaseStruct) Stop() {
+	// Останавливает внутренние процессы БД
+	dbs.saveStopFlag<-true
+}
+
+func schedule(what func(), delay time.Duration) (chan bool) {
+	ticker := time.NewTicker(delay)
+	stop := make(chan bool)
+	// stopper := func() {
+	// 	ticker.stop()
+	// 	stop <- True
+	// }
+	go func() {
+		for {
+			select {
+			 case <- ticker.C:
+				 what()
+			 case <- stop:
+				 ticker.Stop()
+				 return
+			 }
+		 }
+	}()
+	return stop
 }

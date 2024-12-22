@@ -57,10 +57,25 @@ func (index *FlatIndex) GetVectors() []*utils.Vector {
 	return index.vectors
 }
 
-func (index *FlatIndex) AddVector(v *utils.Vector) {
+func (index *FlatIndex) AddVector(v *utils.Vector) (err error) {
 	index.Lock()
 	defer index.Unlock()
-	index.vectors = append(index.vectors, v)
+	
+	err = index.checkId(v)
+	if err == nil {
+		index.vectors = append(index.vectors, v)
+		return nil
+	}
+	return err
+}
+
+func (index *FlatIndex) checkId(v *utils.Vector) (err error) {
+	for idx := range index.vectors {
+		if index.vectors[idx].ID == v.ID {
+			return errors.New(fmt.Sprintf("Cant add vector with id = %s. Already exists", v.ID))
+		}
+	} 
+	return nil
 }
 
 func (index *FlatIndex) RemoveVector(id int) {

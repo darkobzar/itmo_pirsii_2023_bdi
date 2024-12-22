@@ -92,6 +92,8 @@ func main() {
 	}
 	fmt.Println(results)
 
+	dbs.stop()
+
 	// Обновление вектора
 	//v0 := utils.Vector{1, []float64{5, 5, 5, 5}}
 	//db.SetVector(2, v0)

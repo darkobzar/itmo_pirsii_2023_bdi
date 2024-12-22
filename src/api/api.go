@@ -34,6 +34,11 @@ func CreateOrGetDB(w http.ResponseWriter, r *http.Request) {
 
 	name := r.URL.Query().Get("name")
 
+	// if len(name) < 3 {
+	// 	http.Error(w, err.Error(), http.StatusBadRequest)
+	// 	return
+	// }
+
 	dbs, err = db.NewDataBase(name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
