@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/gorilla/mux"
 )
-
 
 var dbs *database.DataBaseStruct
 
@@ -120,6 +120,7 @@ func LoadCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 func FlushCollection(w http.ResponseWriter, r *http.Request) {
+
 	vars := mux.Vars(r)
 	db_name := vars["database"]
 	name := vars["name"]
@@ -133,10 +134,6 @@ func FlushCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
-	url := fmt.Sprintf("http://localhost:8001/api/replica/1/%s/collection/%s", db_name, name)
-	url2 := fmt.Sprintf("http://localhost:8002/api/replica/2/%s/collection/%s", db_name, name)
-
 	err, vects := dbs.Flush(name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -144,71 +141,89 @@ func FlushCollection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonData, err := json.Marshal(vects)
-    if err != nil {
-        fmt.Println("Error marshalling to JSON:", err)
-        return
-    }
+	if err != nil {
+		fmt.Println("Error marshalling to JSON:", err)
+		return
+	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-    if err != nil {
-        panic(err)
-    }
-	req2, err := http.NewRequest("POST", url2, bytes.NewBuffer(jsonData))
-    if err != nil {
-        panic(err)
-    }
-	req.Header.Set("Content-Type", "application/json")
-	req2.Header.Set("Content-Type", "application/json")
+	hosts := readHostList()
+	for _, h := range hosts {
 
-	client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        panic(err)
-    }
-    defer resp.Body.Close()
+		url := fmt.Sprintf("http://localhost:%s/api/replica/%s/collection/%s", h, db_name, name)
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+		if err != nil {
+			panic(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
 
-	resp2, err := client.Do(req2)
-    if err != nil {
-        panic(err)
-    }
-    defer resp2.Body.Close()
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			panic(err)
+		}
+		defer resp.Body.Close()
+	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
+func readHostList() []string {
+	file, err := os.Open("replicas_list.txt")
+
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+	defer file.Close() // Ensure the file is closed at the end
+
+	// Create a scanner to read the file line by line
+	scanner := bufio.NewScanner(file)
+
+	// Read and print each line
+	var hosts []string
+
+	// Read each line and append it to the slice
+	for scanner.Scan() {
+		hosts = append(hosts, scanner.Text())
+	}
+
+	return hosts
+}
+
 func Replicate(w http.ResponseWriter, r *http.Request) {
+	_, repl_num, _ := net.SplitHostPort(r.Host)
+
 	vars := mux.Vars(r)
 	db_name := vars["database"]
 	name := vars["name"]
-	repl_num := vars["repl_num"]
 
-	path := "./data-r-"+repl_num+"/"+db_name+"/"+name+"/FlatIndex.txt"
+	path := "./data-r-" + repl_num + "/" + db_name + "/" + name + "/FlatIndex.txt"
+	os.MkdirAll(path, 0755)
 
 	var vects []utils.Vector
 
-    // Unmarshal the JSON data into the slice of structs
+	// Unmarshal the JSON data into the slice of structs
 	err := json.NewDecoder(r.Body).Decode(&vects)
-    if err != nil {
-        http.Error(w, "Invalid JSON", http.StatusBadRequest)
-        return
-    }
-
+	if err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
 
 	if _, err := os.Stat(path); err == nil {
 		err := os.Remove(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-        	return
+			return
 		}
 	} else if !os.IsNotExist(err) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-        return
+		return
 	}
 
 	file, err := os.Create(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-        return
+		return
 	}
 
 	writer := bufio.NewWriter(file)
@@ -227,22 +242,21 @@ func Replicate(w http.ResponseWriter, r *http.Request) {
 		_, err := writer.WriteString(line + "\n") // Append newline character
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-        	return
+			return
 		}
 	}
 
 	err = writer.Flush()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-        return
+		return
 	}
 
 	err = file.Close()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-        return
+		return
 	}
-
 
 	w.WriteHeader(http.StatusOK)
 }

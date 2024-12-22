@@ -11,6 +11,9 @@ import (
 	"strconv"
 	"log"
 	"time"
+	"encoding/json"
+	"bytes"
+	"net/http"
 
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/index"
 	"github.com/karpovich-alex/itmo_pirsii_2023_bdi/src/measures"
@@ -265,13 +268,62 @@ func (dbs *DataBaseStruct) Load(collectionName string) (err error) {
 	return nil
 }
 
+func readHostList() []string{
+	file, err := os.Open("replicas_list.txt")
+
+	if err != nil {
+        fmt.Println(err)
+        return nil
+    }
+    defer file.Close() // Ensure the file is closed at the end
+
+    // Create a scanner to read the file line by line
+    scanner := bufio.NewScanner(file)
+
+    // Read and print each line
+    var hosts []string
+
+    // Read each line and append it to the slice
+    for scanner.Scan() {
+        hosts = append(hosts, scanner.Text())
+    }
+
+	return hosts
+}
+
 func (dbs *DataBaseStruct) Save(collectionName string) (err error) {
 	collection, err := dbs.getLoadedCollection(collectionName)
 	if err != nil {
 		return err
 	}
 	err = collection.Flush()
-	// TODO: Add replication algorithm here
+	vects := collection.Index.GetVectors()
+	
+
+	jsonData, err := json.Marshal(vects)
+    if err != nil {
+        fmt.Println("Error marshalling to JSON:", err)
+        return
+    }
+
+	hosts := readHostList()
+	for _, h := range hosts{
+
+		url := fmt.Sprintf("http://localhost:%s/api/replica/%s/collection/%s", h, dbs.name, collectionName)
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+		if err != nil {
+			panic(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			panic(err)
+		}
+		defer resp.Body.Close()
+	}
+
 	return err
 }
 
