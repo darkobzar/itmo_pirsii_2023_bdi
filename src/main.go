@@ -145,12 +145,12 @@ func main() {
     defer ticker.Stop()
 
 	
-	//go monitorMaster(30*time.Second)
+	go monitorMaster(30*time.Second)
 
-	//time.Sleep(10 * time.Second) // Let the server run for 10 seconds
-    //stopServer(srv)                 // Simulate master failure
+	time.Sleep(40 * time.Second) // Let the server run for 10 seconds
+    stopServer(srv)                 // Simulate master failure
 
-    // Keep the main function alive for demonstration purposes
+    //Keep the main function alive for demonstration purposes
     //select {}
 
 
@@ -224,6 +224,11 @@ func InitReplica(w http.ResponseWriter, r *http.Request) {
 			minId = index
 		}
 	}
+	if minId == 100 {
+		http.Error(w,"There is no available hosts", http.StatusInternalServerError)
+		fmt.Println("There is no available hosts")
+		return
+	}
 	newSlaveHost := hostList.Unused[minId]
 	newSlaveUrl := "http://localhost:" + newSlaveHost.Port + "/api/health"
 	isWorking := checkHostStatus(newSlaveUrl)
@@ -233,6 +238,10 @@ func InitReplica(w http.ResponseWriter, r *http.Request) {
 		newSlaveHost.Server.Handler = WrapContext(slaveRouter, &db)
 		hostList.Slaves = append(hostList.Slaves, newSlaveHost)
 		hostList.Unused = append(hostList.Unused[:minId], hostList.Unused[minId+1:]...)
+	} else{
+		http.Error(w,"There is no available hosts", http.StatusInternalServerError)
+		fmt.Println("There is no available hosts")
+		return
 	}
 
 	fmt.Println("New replica is running on port: ", newSlaveHost.Port)
@@ -240,7 +249,6 @@ func InitReplica(w http.ResponseWriter, r *http.Request) {
 	dbs, err := db.Get(db_name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
-		return
 	}
 
 
@@ -297,6 +305,7 @@ func createSlaveRouter() *mux.Router{
 		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
 	router.HandleFunc("/api/database", api.CreateOrGetDB).Methods("POST")
+	router.HandleFunc("/api/database", api.CreateOrGetDB).Methods("POST")
 	router.HandleFunc("/api/database/{database}/collection/{name}", api.LoadCollection).Methods("GET")
 	router.HandleFunc("/api/replica/{database}/collection/{name}", api.Replicate).Methods("POST")
 
@@ -318,22 +327,30 @@ func createUnusedRouter() *mux.Router{
 func setNewMaster() {
 	minId := 100
 	minSl := 100
+
 	
 	for index, sl := range hostList.Slaves{
 		if sl.ID < minSl{
-			minSl = sl.ID
-			minId = index
+			masterHost := hostList.Slaves[index]
+			masterURL := "http://localhost:" + masterHost.Port + "/api/health"
+			isWorking := checkHostStatus(masterURL)
+			if isWorking{
+				minSl = sl.ID
+				minId = index
+			}
 		}
 	}
-	masterHost := hostList.Slaves[minId]
-	masterURL := "http://localhost:" + masterHost.Port + "/api/health"
-	isWorking := checkHostStatus(masterURL)
 
-	if isWorking{
-		masterHost.Server.Handler = WrapContext(masterRouter, &db)
-		hostList.Master = masterHost
-		hostList.Slaves = append(hostList.Slaves[:minId], hostList.Slaves[minId+1:]...)
+	if minId == 100{
+		fmt.Println("There is no available hosts")
+		return
 	}
+
+	masterHost := hostList.Slaves[minId]
+	hostList.Slaves = append(hostList.Slaves[:minId], hostList.Slaves[minId+1:]...)
+	masterHost.Server.Handler = WrapContext(masterRouter, &db)
+	hostList.Master = masterHost
+
 
 	fmt.Println("New master is running on port: ", masterHost.Port)
 	updateHostList()

@@ -72,7 +72,7 @@ func (index *FlatIndex) AddVector(v *utils.Vector) (err error) {
 func (index *FlatIndex) checkId(v *utils.Vector) (err error) {
 	for idx := range index.vectors {
 		if index.vectors[idx].ID == v.ID {
-			return errors.New(fmt.Sprintf("Cant add vector with id = %s. Already exists", v.ID))
+			return errors.New(fmt.Sprintf("Cant add vector with id = %d. Already exists", v.ID))
 		}
 	} 
 	return nil

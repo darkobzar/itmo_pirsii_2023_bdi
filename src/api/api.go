@@ -111,6 +111,20 @@ func LoadCollection(w http.ResponseWriter, r *http.Request) {
 
 	err = dbs.Load(vars["name"])
 
+	for _, v := range dbs.LoadedCollections[vars["name"]].Index.GetVectors(){
+		var stringValues []string
+		for _, value := range v.Embedding {
+			
+			// Convert float to string with desired format
+			strValue := strconv.FormatFloat(value, 'f', -1, 64) // 'f' for decimal point format
+			stringValues = append(stringValues, strValue)
+		}
+	
+		// Step 4: Join the string slice into one string
+		result := strings.Join(stringValues, ", ")
+		fmt.Println(v.ID, ": ", result)
+	}
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -118,6 +132,7 @@ func LoadCollection(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+
 
 func FlushCollection(w http.ResponseWriter, r *http.Request) {
 
