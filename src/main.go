@@ -305,8 +305,7 @@ func createSlaveRouter() *mux.Router{
 		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
 	router.HandleFunc("/api/database", api.CreateOrGetDB).Methods("POST")
-	router.HandleFunc("/api/database", api.CreateOrGetDB).Methods("POST")
-	router.HandleFunc("/api/database/{database}/collection/{name}", api.LoadCollection).Methods("GET")
+	router.HandleFunc("/api/replica/{database}/collection/{name}", api.ReadReplica).Methods("GET")
 	router.HandleFunc("/api/replica/{database}/collection/{name}", api.Replicate).Methods("POST")
 
 	return router

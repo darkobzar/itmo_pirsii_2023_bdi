@@ -97,6 +97,52 @@ func DeleteCollection(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func ReadReplica(w http.ResponseWriter, r *http.Request){
+	_, repl_num, _ := net.SplitHostPort(r.Host)
+	vars := mux.Vars(r)
+
+	full_path := "./data-r-" + repl_num + "/" + vars["database"] + "/" + vars["name"] + "/FlatIndex.txt"
+	_, err_path := os.Stat(full_path)
+	if os.IsNotExist(err_path) {
+		fmt.Println(full_path)
+		http.Error(w,"Collection path for index doesn't exist!" , http.StatusInternalServerError)
+	} 
+
+	file, _ := os.Open(full_path)
+	scanner := bufio.NewScanner(file)
+
+	var vectors []utils.Vector
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		fmt.Println(line)
+		str_emb := strings.Fields(line)
+		vect_id, err := strconv.Atoi(str_emb[0])
+		if err != nil {
+			http.Error(w, err.Error() , http.StatusInternalServerError)
+		}
+
+		var float_emb []float64
+		for _, str := range str_emb[1:] {
+			if value, err := strconv.ParseFloat(str, 64); err == nil {
+				float_emb = append(float_emb, value)
+			} else {
+				http.Error(w, err.Error() , http.StatusInternalServerError)
+			}
+		}
+
+		vect := utils.Vector{vect_id, float_emb}
+		vectors = append(vectors, vect)
+	}
+
+	err := file.Close()
+	if err != nil {
+		http.Error(w, err.Error() , http.StatusInternalServerError)
+	}
+
+	return
+}
+
 func LoadCollection(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
